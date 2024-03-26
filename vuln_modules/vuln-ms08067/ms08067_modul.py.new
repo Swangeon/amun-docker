@@ -1,0 +1,839 @@
+"""
+[Amun - low interaction honeypot]
+Copyright (C) [2008]  [Jan Goebel]
+
+This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program; if not, see <http://www.gnu.org/licenses/>
+"""
+
+import psyco ; psyco.full()
+from psyco.classes import *
+
+import struct
+import random
+from ms08067_shellcodes import *
+
+import amun_logging
+
+### Modul to analyze new vulnerabilities, get everything send to a port and send it to shellcode_manager
+
+class vuln:
+	def __init__(self):
+		try:
+			self.vuln_name = "MS08067 Vulnerability"
+			self.stage = "MS08067_STAGE1"
+			self.welcome_message = ""
+			self.shellcode = []
+		except KeyboardInterrupt:
+			raise
+
+	def print_message(self, data):
+		print "\n"
+		counter = 1
+		for byte in data:
+			if counter==16:
+				ausg = hex(struct.unpack("B",byte)[0])
+				if len(ausg) == 3:
+					list = str(ausg).split("x")
+					ausg = "%sx0%s" % (list[0],list[1])
+					print ausg
+				else:
+					print ausg
+				counter = 0
+			else:
+				ausg = hex(struct.unpack("B",byte)[0])
+				if len(ausg) == 3:
+					list = str(ausg).split("x")
+					ausg = "%sx0%s" % (list[0],list[1])
+					print ausg,
+				else:
+					print ausg,
+			counter += 1
+		print "\n>> Incoming Codesize: %s\n\n" % (len(data))
+
+	def getVulnName(self):
+		return self.vuln_name
+
+	def getCurrentStage(self):
+		return self.stage
+
+	def getWelcomeMessage(self):
+		return self.welcome_message
+
+	def incoming(self, message, bytes, ip, vuLogger, random_reply):
+		try:
+			self.log_obj = amun_logging.amun_logging("vuln_analyzer", vuLogger)
+
+			### construct standard reply
+			#self.reply = random_reply
+			#self.reply = []
+			#for i in range(0,400):
+			#	try:
+			#		self.reply.append( struct.pack("B", 0) )
+			#	except KeyboardInterrupt:
+			#		raise
+
+			### prepare default resultSet
+			resultSet = {}
+			resultSet["vulnname"] = self.vuln_name
+			resultSet["accept"] = False
+			resultSet["result"] = False
+			resultSet["shutdown"] = False
+			resultSet["reply"] = "None"
+			resultSet["stage"] = self.stage
+			resultSet["shellcode"] = "None"
+			resultSet["isFile"] = False
+
+			### preprocess
+			if message[8]=='\xa2' and bytes!=95:
+				self.stage = "MS08067_STAGE7"
+			#elif message[8]=='\x2e' and bytes==63:
+			#	self.stage = "MS08067_STAGE9"
+			elif message[8]=='\x2f' and bytes!=68:
+				self.stage = "MS08067_STAGE8"
+
+
+			if self.stage == "MS08067_STAGE1" and (bytes==51 or bytes==88):
+				""" Negotiation Response """
+				if message[8]!='\x72':
+					return resultSet
+				print ".::[Amun - MS08-067 STAGE1] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				#print ">> Request:"
+				#self.print_message(message)
+				resultSet["result"] = True
+				resultSet["accept"] = True
+
+				### packet
+				self.reply = []
+				self.reply.extend(list(net_header))
+				self.reply.extend(list(smb_header))
+
+				self.reply[SMB_PID0] = message[SMB_PID0]
+				self.reply[SMB_PID1] = message[SMB_PID1]
+
+				self.reply[SMB_MID0] = message[SMB_MID0]
+				self.reply[SMB_MID1] = message[SMB_MID1]
+			
+				fill = ['\x00'] * 100
+				self.reply.extend(fill)
+
+				### word count
+				self.reply[36] = "\x11"
+				###### parameter block
+				### dialect
+				self.reply[37] = "\x03"
+				self.reply[38] = "\x00"
+				### securityMode
+				self.reply[39] = "\x01"
+				### max mpx count
+				self.reply[40] = "\x0a"
+				self.reply[41] = "\x00"
+				### max vcs
+				self.reply[42] = "\x01"
+				self.reply[43] = "\x00"
+				### max buffer size
+				self.reply[44] = "\x04"
+				self.reply[45] = "\x11"
+				self.reply[46] = "\x00"
+				self.reply[47] = "\x00"
+				### max raw
+				self.reply[48] = "\x00"
+				self.reply[49] = "\x00"
+				self.reply[50] = "\x01"
+				self.reply[51] = "\x00"
+				### session key
+				self.reply[52] = "\x00"
+				self.reply[53] = "\x00"
+				self.reply[54] = "\x00"
+				self.reply[55] = "\x00"
+				### capabilities
+				self.reply[56] = "\xfd"
+				self.reply[57] = "\xe3"
+				self.reply[58] = "\x00"
+				self.reply[59] = "\x80"
+				### system time high
+				self.reply[60] = "\xb2"
+				self.reply[61] = "\xbf"
+				self.reply[62] = "\x45"
+				self.reply[63] = "\xc0"
+				self.reply[64] = "\x79"
+				self.reply[65] = "\x3e"
+				self.reply[66] = "\xc9"
+				self.reply[67] = "\x01"
+				### server time zone
+				self.reply[68] = "\x20"
+				self.reply[69] = "\xfe"
+				### encryptedkey lenght
+				self.reply[70] = "\x00"
+				### byte count
+				self.reply[71] = "\x10"
+				self.reply[72] = "\x00"
+				### server guid
+				self.reply[73] = "\xc8"
+				self.reply[74] = "\x4c"
+				self.reply[75] = "\x2a"
+				self.reply[76] = "\xe6"
+				self.reply[77] = "\xf2"
+				self.reply[78] = "\xad"
+				self.reply[79] = "\xda"
+				self.reply[80] = "\x4e"
+				self.reply[81] = "\x98"
+				self.reply[82] = "\xad"
+				self.reply[83] = "\xce"
+				self.reply[84] = "\x47"
+				self.reply[85] = "\x69"
+				self.reply[86] = "\x80"
+				self.reply[87] = "\x97"
+				self.reply[88] = "\x76"
+
+				resultSet['reply'] = "".join(self.reply[:89])
+				self.stage = "MS08067_STAGE2"
+				return resultSet
+			elif self.stage == "MS08067_STAGE2" and (bytes==79 or bytes==77 or bytes==189):
+				""" Session Setup AndX Response 1 MORE_PROCESSING_REQUIRED """
+				print ".::[Amun - MS08-067 STAGE2] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				#print ">> Request:"
+				#self.print_message(message)
+				resultSet["result"] = True
+				resultSet["accept"] = True
+				
+				### packet
+				self.reply = []
+				self.reply.extend(list(net_header))
+				self.reply.extend(list(smb_header))
+
+				self.reply[SMB_LEN0] = "\x01"
+				self.reply[SMB_LEN1] = "\x2e"
+
+				self.reply[SMB_COMMAND] = "\x73"
+
+				self.reply[SMB_ERRCLASS] = "\x16"
+				self.reply[SMB_ERRCODE1] = "\xc0"
+
+				self.reply[SMB_FLAG1] = "\x68"
+
+				self.reply[SMB_PID0] = message[SMB_PID0]
+				self.reply[SMB_PID1] = message[SMB_PID1]
+
+				self.reply[SMB_UID0] = "\x00"
+				self.reply[SMB_UID1] = "\x08"
+
+				self.reply[SMB_MID0] = message[SMB_MID0]
+				self.reply[SMB_MID1] = message[SMB_MID1]
+
+				fill = ['\x00'] * 11
+				self.reply.extend(fill)
+
+				### word count
+				self.reply[36] = "\x04"
+				###### parameter block
+				### andxcommand
+				self.reply[37] = "\xff"
+				### reserved
+				self.reply[38] = "\x00"
+				### anxoffset
+				self.reply[39] = "\x3b"
+				self.reply[40] = "\x01"
+				### action
+				self.reply[41] = "\x00"
+				self.reply[42] = "\x00"
+				### security blob length
+				self.reply[43] = "\xeb"
+				self.reply[44] = "\x00"
+				### byte count
+				self.reply[45] = "\x10"
+				self.reply[46] = "\x01"
+				###
+				self.reply.extend(list(session_data))
+				self.reply.extend(list(native_os))
+				self.reply.extend(list(prim_domain))
+				###
+
+				resultSet['reply'] = "".join(self.reply[0:304])
+				self.stage = "MS08067_STAGE3"
+				return resultSet
+			elif self.stage == "MS08067_STAGE3" and (bytes==72 or bytes==273):
+				""" Session Setup AndX Response 2 LOGON_FAILURE """
+				print ".::[Amun - MS08-067 STAGE3] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				resultSet["result"] = True
+				resultSet["accept"] = True
+				#print ">> Request:"
+				#self.print_message(message)
+
+				### packet
+				self.reply = []
+				self.reply.extend(list(net_header))
+				self.reply.extend(list(smb_header))
+
+				self.reply[SMB_LEN0] = "\x00"
+				self.reply[SMB_LEN1] = "\x25"
+
+				self.reply[SMB_COMMAND] = "\x73"
+
+				self.reply[SMB_ERRCLASS] = "\x6d"
+				self.reply[SMB_ERRCODE1] = "\x0c"
+
+				self.reply[SMB_FLAG1] = "\x68"
+
+				self.reply[SMB_PID0] = message[SMB_PID0]
+				self.reply[SMB_PID1] = message[SMB_PID1]
+
+				self.reply[SMB_UID0] = "\x00"
+				self.reply[SMB_UID1] = "\x08"
+
+				self.reply[SMB_MID0] = message[SMB_MID0]
+				self.reply[SMB_MID1] = message[SMB_MID1]
+
+				fill = ['\x00'] * 3
+				self.reply.extend(fill)
+
+				### word count
+				self.reply[36] = "\x00"
+				### byte count
+				self.reply[37] = "\x00"
+				self.reply[38] = "\x00"
+				
+				resultSet['reply'] = "".join(self.reply[:39])
+				self.stage = "MS08067_STAGE4"
+				return resultSet
+			elif self.stage == "MS08067_STAGE4" and (bytes==96 or bytes==111):
+				""" Session Setup AndX Response 3 """
+				print ".::[Amun - MS08-067 STAGE4] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				#print ">> Request:"
+				#self.print_message(message)
+				resultSet["result"] = True
+				resultSet["accept"] = True
+
+				### packet
+				self.reply = []
+				self.reply.extend(list(net_header))
+				self.reply.extend(list(smb_header))
+
+				self.reply[SMB_LEN0] = "\x00"
+				self.reply[SMB_LEN1] = "\x5a"
+
+				self.reply[SMB_COMMAND] = "\x73"
+
+				self.reply[SMB_ERRCLASS] = "\x00"
+				self.reply[SMB_ERRCODE1] = "\x00"
+
+				self.reply[SMB_FLAG1] = "\x20"
+
+				self.reply[SMB_PID0] = message[SMB_PID0]
+				self.reply[SMB_PID1] = message[SMB_PID1]
+
+				self.reply[SMB_UID0] = "\x01"
+				self.reply[SMB_UID1] = "\x08"
+
+				self.reply[SMB_MID0] = message[SMB_MID0]
+				self.reply[SMB_MID1] = message[SMB_MID1]
+
+				fill = ['\x00'] * 9
+				self.reply.extend(fill)
+
+				### word count
+				self.reply[36] = "\x03"
+				###### parameter block
+				### andxcommand
+				self.reply[37] = "\xff"
+				### reserved
+				self.reply[38] = "\x00"
+				### anxoffset
+				self.reply[39] = "\x58"
+				self.reply[40] = "\x00"
+				### action
+				self.reply[41] = "\x00"
+				self.reply[42] = "\x00"
+				### byte count
+				self.reply[43] = "\x2f"
+				self.reply[44] = "\x00"
+				### native os
+				self.reply.extend(list(native_os))
+				### native lan manager
+				self.reply.extend(list(native_lan_man))
+				### primary domain
+				self.reply.extend(list(prim_domain))
+				###
+
+				resultSet['reply'] = "".join(self.reply[:92])
+				self.stage = "MS08067_STAGE5"
+				return resultSet
+			elif self.stage == "MS08067_STAGE5" and (bytes==150 or bytes==71):
+				""" Tree Connect AndX Respone """
+				print ".::[Amun - MS08-067 STAGE5] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				#print ">> Request:"
+				#self.print_message(message)
+				resultSet["result"] = True
+				resultSet["accept"] = True
+				
+				### packet
+				self.reply = []
+				self.reply.extend(list(net_header))
+				self.reply.extend(list(smb_header))
+
+				self.reply[SMB_LEN0] = "\x00"
+				self.reply[SMB_LEN1] = "\x30"
+
+				self.reply[SMB_COMMAND] = "\x75"
+
+				self.reply[SMB_ERRCLASS] = "\x00"
+				self.reply[SMB_ERRCODE1] = "\x00"
+
+				self.reply[SMB_FLAG1] = "\x20"
+
+				self.reply[SMB_TREEID0] = "\x00"
+				self.reply[SMB_TREEID1] = "\x08"
+
+				self.reply[SMB_PID0] = message[SMB_PID0]
+				self.reply[SMB_PID1] = message[SMB_PID1]
+
+				self.reply[SMB_UID0] = "\x01"
+				self.reply[SMB_UID1] = "\x08"
+
+				self.reply[SMB_MID0] = message[SMB_MID0]
+				self.reply[SMB_MID1] = message[SMB_MID1]
+
+				fill = ['\x00'] * 14
+				self.reply.extend(fill)
+
+				### word count
+				self.reply[36] = "\x03"
+				### andx command
+				self.reply[37] = "\xff"
+				### reserved
+				self.reply[38] = "\x00"
+				### andx offset
+				self.reply[39] = "\x2e"
+				self.reply[40] = "\x00"
+				### optional support
+				self.reply[41] = "\x01"
+				self.reply[42] = "\x00"
+				### byte count
+				self.reply[43] = "\x05"
+				self.reply[44] = "\x00"
+				### service
+				self.reply[45] = "\x49"
+				self.reply[46] = "\x50"
+				self.reply[47] = "\x43"
+				self.reply[48] = "\x00"
+				### native filesystem
+				self.reply[49] = "\x00"
+				###
+
+				resultSet['reply'] = "".join(self.reply[:50])
+				self.stage = "MS08067_STAGE6"
+				return resultSet
+			elif self.stage == "MS08067_STAGE6" and bytes==95:
+				""" NT Create AndX Response 1 ACCESS_DENIED """
+				print ".::[Amun - MS08-067 STAGE6] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				#print ">> Request:"
+				#self.print_message(message)
+				resultSet["result"] = True
+				resultSet["accept"] = True
+
+				### packet
+				self.reply = []
+				self.reply.extend(list(net_header))
+				self.reply.extend(list(smb_header))
+
+				self.reply[SMB_LEN0] = "\x00"
+				self.reply[SMB_LEN1] = "\x25"
+
+				self.reply[SMB_COMMAND] = "\xa2"
+
+				self.reply[SMB_ERRCLASS] = "\x22"
+				self.reply[SMB_ERRCODE1] = "\xc0"
+
+				self.reply[SMB_FLAG0] = "\x01"
+				self.reply[SMB_FLAG1] = "\x60"
+
+				self.reply[SMB_TREEID0] = "\x00"
+				self.reply[SMB_TREEID1] = "\x08"
+
+				self.reply[SMB_PID0] = message[SMB_PID0]
+				self.reply[SMB_PID1] = message[SMB_PID1]
+
+				self.reply[SMB_UID0] = "\x01"
+				self.reply[SMB_UID1] = "\x08"
+
+				self.reply[SMB_MID0] = message[SMB_MID0]
+				self.reply[SMB_MID1] = message[SMB_MID1]
+
+				fill = ['\x00'] * 3
+				self.reply.extend(fill)
+
+				### word count
+				self.reply[36] = "\x00"
+				### byte count
+				self.reply[37] = "\x00"
+				self.reply[38] = "\x00"
+				###
+
+				resultSet['reply'] = "".join(self.reply[:39])
+				self.stage = "MS08067_STAGE7"
+				return resultSet
+			elif self.stage == "MS08067_STAGE7" and bytes==96:
+				""" NT Create AndX Response FID """
+				print ".::[Amun - MS08-067 STAGE7] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				#print ">> Request:"
+				#self.print_message(message)
+				resultSet["result"] = True
+				resultSet["accept"] = True
+
+				### packet
+				self.reply = []
+				self.reply.extend(list(net_header))
+				self.reply.extend(list(smb_header))
+
+				self.reply[SMB_LEN0] = "\x00"
+				self.reply[SMB_LEN1] = "\x89"
+
+				self.reply[SMB_COMMAND] = "\xa2"
+
+				self.reply[SMB_ERRCLASS] = "\x00"
+				self.reply[SMB_ERRCODE1] = "\x00"
+
+				self.reply[SMB_FLAG0] = "\x01"
+				self.reply[SMB_FLAG1] = "\x20"
+
+				self.reply[SMB_TREEID0] = "\x00"
+				self.reply[SMB_TREEID1] = "\x08"
+
+				self.reply[SMB_PID0] = message[SMB_PID0]
+				self.reply[SMB_PID1] = message[SMB_PID1]
+
+				self.reply[SMB_UID0] = "\x01"
+				self.reply[SMB_UID1] = "\x08"
+
+				self.reply[SMB_MID0] = message[SMB_MID0]
+				self.reply[SMB_MID1] = message[SMB_MID1]
+
+				fill = ['\x00'] * 6
+				self.reply.extend(fill)
+
+				### word count
+				self.reply[36] = "\x2a"
+				### andx command
+				self.reply[37] = "\xff"
+				### reserved
+				self.reply[38] = "\x00"
+				### andx offset
+				self.reply[39] = "\x87"
+				self.reply[40] = "\x00"
+				### op lock level
+				self.reply[41] = "\x00"
+				### FID
+				self.reply.extend(list(fid_len))
+				### create action
+				self.reply.extend(list(create_action))
+				### created
+				self.reply.extend(list(created))
+				### last access
+				self.reply.extend(list(last_access))
+				### last write
+				self.reply.extend(list(last_write))
+				### change
+				self.reply.extend(list(last_change))
+				### file attributes 
+				self.reply.extend(list(file_attrib))
+				### allocation size
+				self.reply.extend(list(alloc_size))
+				### end of file
+				self.reply.extend(list(endof_file))
+				### file type
+				self.reply.extend(list(file_type))
+				### ipc state
+				self.reply.extend(list(ipc_state))
+				### directory
+				self.reply.extend(list(is_directory))
+				### byte count
+				self.reply.append("\x00")
+				self.reply.append("\x00")
+				### fid
+				self.reply.extend(list(fid_data))
+				###
+
+				resultSet['reply'] = "".join(self.reply[:139])
+				self.stage = "MS08067_STAGE8"
+				return resultSet
+			elif self.stage == "MS08067_STAGE8" and bytes>0:
+				""" Write AndX Respone 1 """
+				print ".::[Amun - MS08-067 STAGE8] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				print ">> Request:"
+				self.print_message(message)
+				resultSet["result"] = False
+				resultSet["accept"] = True
+
+				self.shellcode.append(message)
+				resultSet["shellcode"] = "".join(self.shellcode)
+				resultSet['reply'] = "None"
+				return resultSet
+
+				### packet
+				self.reply = []
+				self.reply.extend(list(net_header))
+				self.reply.extend(list(smb_header))
+
+				self.reply[SMB_LEN0] = "\x00"
+				self.reply[SMB_LEN1] = "\x31"
+
+				self.reply[SMB_COMMAND] = "\x2f"
+
+				self.reply[SMB_ERRCLASS] = "\x00"
+				self.reply[SMB_ERRCODE1] = "\x00"
+
+				self.reply[SMB_FLAG0] = "\x01"
+				self.reply[SMB_FLAG1] = "\x20"
+
+				self.reply[SMB_TREEID0] = "\x00"
+				self.reply[SMB_TREEID1] = "\x08"
+
+				self.reply[SMB_PID0] = message[SMB_PID0]
+				self.reply[SMB_PID1] = message[SMB_PID1]
+
+				self.reply[SMB_UID0] = "\x01"
+				self.reply[SMB_UID1] = "\x08"
+
+				self.reply[SMB_MID0] = message[SMB_MID0]
+				self.reply[SMB_MID1] = message[SMB_MID1]
+
+				fill = ['\x00'] * 15
+				self.reply.extend(fill)
+
+				### word count
+				self.reply[36] = "\x06"
+				### andx command
+				self.reply[37] = "\xff"
+				### reserved
+				self.reply[38] = "\x00"
+				### andx offset
+				self.reply[39] = "\x2f"
+				self.reply[40] = "\x00"
+				### count low
+				self.reply[41] = message[53]
+				self.reply[42] = message[54]
+				### remaining
+				self.reply[43] = "\xff"
+				self.reply[44] = "\xff"
+				### count high
+				self.reply[45] = "\x00"
+				self.reply[46] = "\x00"
+				### reserved
+				self.reply[47] = "\x00"
+				self.reply[48] = "\x00"
+				### byte count
+				self.reply[49] = "\x00"
+				self.reply[50] = "\x00"
+				###
+
+				resultSet['reply'] = "".join(self.reply[:51])
+				self.stage = "MS08067_STAGE9"
+				return resultSet
+			elif self.stage == "MS08067_STAGE9" and bytes>0:
+				""" Read AndX Response 1 BUFFER_OVERFLOW """
+				print ".::[Amun - MS08-067 STAGE9] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				#print ">> Request:"
+				#self.print_message(message)
+				resultSet["result"] = True
+				resultSet["accept"] = True
+
+				### packet
+				self.reply = []
+				self.reply.extend(list(net_header))
+				self.reply.extend(list(smb_header))
+
+				self.reply[SMB_LEN0] = "\x00"
+				self.reply[SMB_LEN1] = "\xd6"
+
+				self.reply[SMB_COMMAND] = "\x2e"
+
+				self.reply[SMB_ERRCLASS] = "\x05"
+				self.reply[SMB_ERRCODE1] = "\x80"
+
+				self.reply[SMB_FLAG0] = "\x01"
+				self.reply[SMB_FLAG1] = "\x60"
+
+				self.reply[SMB_TREEID0] = "\x00"
+				self.reply[SMB_TREEID1] = "\x08"
+
+				self.reply[SMB_PID0] = message[SMB_PID0]
+				self.reply[SMB_PID1] = message[SMB_PID1]
+
+				self.reply[SMB_UID0] = "\x01"
+				self.reply[SMB_UID1] = "\x08"
+
+				self.reply[SMB_MID0] = message[SMB_MID0]
+				self.reply[SMB_MID1] = message[SMB_MID1]
+
+				fill = ['\x00'] * 28
+				self.reply.extend(fill)
+
+				### word count
+				self.reply[36] = "\x0c"
+				### andx command
+				self.reply[37] = "\xff"
+				### reserved
+				self.reply[38] = "\x00"
+				### andx offset
+				self.reply[39] = "\x00"
+				self.reply[40] = "\x00"
+				### remaining
+				self.reply[41] = "\x00"
+				self.reply[42] = "\x00"
+				### data compaction mode
+				self.reply[43] = "\x00"
+				self.reply[44] = "\x00"
+				### reserved
+				self.reply[45] = "\x00"
+				self.reply[46] = "\x00"
+				### data length low
+				self.reply[47] = message[47]
+				self.reply[48] = message[48]
+				### data offset
+				self.reply[49] = "\x3c"
+				self.reply[50] = "\x00"
+				### data length high
+				self.reply[51] = "\x00"
+				self.reply[52] = "\x00"
+				self.reply[53] = "\x00"
+				self.reply[54] = "\x00"
+				### reserved
+				self.reply[55] = "\x00"
+				self.reply[56] = "\x00"
+				self.reply[57] = "\x00"
+				self.reply[58] = "\x00"
+				self.reply[59] = "\x00"
+				self.reply[60] = "\x00"
+				### byte count
+				self.reply[61] = "\x98"
+				self.reply[62] = "\x00"
+				### padding
+				self.reply[63] = "\x00"
+				### data
+				self.reply.extend(list(read_data))
+				###
+
+				resultSet['reply'] = "".join(self.reply[:216])
+				self.stage = "MS08067_STAGE10"
+				return resultSet
+			elif self.stage == "MS08067_STAGE10" and bytes>0:
+				""" Read AndX Response Bind ack"""
+				print ".::[Amun - MS08-067 STAGE10] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				#print ">> Request:"
+				#self.print_message(message)
+				resultSet["result"] = False
+				resultSet["accept"] = True
+
+				### packet
+				self.reply = []
+				self.reply.extend(list(net_header))
+				self.reply.extend(list(smb_header))
+
+				self.reply[SMB_LEN0] = "\x01"
+				self.reply[SMB_LEN1] = "\x24"
+
+				self.reply[SMB_COMMAND] = "\x2e"
+
+				self.reply[SMB_ERRCLASS] = "\x00"
+				self.reply[SMB_ERRCODE1] = "\x00"
+
+				self.reply[SMB_FLAG0] = "\x01"
+				self.reply[SMB_FLAG1] = "\x20"
+
+				self.reply[SMB_TREEID0] = "\x00"
+				self.reply[SMB_TREEID1] = "\x08"
+
+				self.reply[SMB_PID0] = message[SMB_PID0]
+				self.reply[SMB_PID1] = message[SMB_PID1]
+
+				self.reply[SMB_UID0] = "\x01"
+				self.reply[SMB_UID1] = "\x08"
+
+				self.reply[SMB_MID0] = message[SMB_MID0]
+				self.reply[SMB_MID1] = message[SMB_MID1]
+
+				fill = ['\x00'] * 28
+				self.reply.extend(fill)
+
+				### word count
+				self.reply[36] = "\x0c"
+				### andx command
+				self.reply[37] = "\xff"
+				### reserved
+				self.reply[38] = "\x00"
+				### andx offset
+				self.reply[39] = "\x00"
+				self.reply[40] = "\x00"
+				### remaining
+				self.reply[41] = "\x00"
+				self.reply[42] = "\x00"
+				### data compaction mode
+				self.reply[43] = "\x00"
+				self.reply[44] = "\x00"
+				### reserved
+				self.reply[45] = "\x00"
+				self.reply[46] = "\x00"
+				### data length low 
+				self.reply[47] = "\xe5"
+				self.reply[48] = "\x00"
+				### data offset
+				self.reply[49] = "\x3c"
+				self.reply[50] = "\x00"
+				### data length high
+				self.reply[51] = "\x00"
+				self.reply[52] = "\x00"
+				self.reply[53] = "\x00"
+				self.reply[54] = "\x00"
+				### reserved
+				self.reply[55] = "\x00"
+				self.reply[56] = "\x00"
+				self.reply[57] = "\x00"
+				self.reply[58] = "\x00"
+				self.reply[59] = "\x00"
+				self.reply[60] = "\x00"
+				### byte count
+				self.reply[61] = "\xe6"
+				self.reply[62] = "\x00"
+				### padding
+				self.reply[63] = "\x00"
+				### data
+				self.reply.extend(list(read_data2))
+				###
+
+				resultSet["shellcode"] = "".join(self.shellcode)
+				resultSet['reply'] = "".join(self.reply[:294])
+				self.stage = "MS08067_STAGE9"
+				return resultSet
+			elif self.stage == "SHELLCODE":
+				if bytes>0:
+					#print ".::[Amun - Analyzer] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+					resultSet["result"] = True
+					resultSet["accept"] = True
+					resultSet['reply'] = "".join(self.reply)
+					self.shellcode.append(message)
+					self.stage = "SHELLCODE"
+					#resultSet["shellcode"] = "".join(self.shellcode)
+					return resultSet
+				else:
+					#print ".::[Amun - Analyzer] finish collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+					resultSet["result"] = False
+					resultSet["accept"] = True
+					resultSet["reply"] = "None"
+					self.shellcode.append(message)
+					resultSet["shellcode"] = "".join(self.shellcode)
+					return resultSet
+			else:
+				resultSet["result"] = False
+				resultSet["accept"] = False
+				resultSet["reply"] = "None"
+				return resultSet
+			return resultSet
+		except KeyboardInterrupt:
+			raise
+		except StandardError, e:
+			print e
+		except:
+			print "Analyzer fatal error"

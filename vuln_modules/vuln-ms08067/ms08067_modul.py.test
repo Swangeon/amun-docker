@@ -1,0 +1,285 @@
+"""
+[Amun - low interaction honeypot]
+Copyright (C) [2008]  [Jan Goebel]
+
+This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program; if not, see <http://www.gnu.org/licenses/>
+"""
+
+import psyco ; psyco.full()
+from psyco.classes import *
+
+import struct
+import random
+import ms08067_shellcodes
+
+import amun_logging
+
+### Modul to analyze new vulnerabilities, get everything send to a port and send it to shellcode_manager
+
+class vuln:
+	def __init__(self):
+		try:
+			self.vuln_name = "MS08067 Vulnerability"
+			self.stage = "MS08067_STAGE1"
+			self.welcome_message = ""
+			self.shellcode = []
+		except KeyboardInterrupt:
+			raise
+
+	def print_message(self, data):
+		print "\n"
+		counter = 1
+		for byte in data:
+			if counter==16:
+				ausg = hex(struct.unpack("B",byte)[0])
+				if len(ausg) == 3:
+					list = str(ausg).split("x")
+					ausg = "%sx0%s" % (list[0],list[1])
+					print ausg
+				else:
+					print ausg
+				counter = 0
+			else:
+				ausg = hex(struct.unpack("B",byte)[0])
+				if len(ausg) == 3:
+					list = str(ausg).split("x")
+					ausg = "%sx0%s" % (list[0],list[1])
+					print ausg,
+				else:
+					print ausg,
+			counter += 1
+		print "\n>> Incoming Codesize: %s\n\n" % (len(data))
+
+	def getVulnName(self):
+		return self.vuln_name
+
+	def getCurrentStage(self):
+		return self.stage
+
+	def getWelcomeMessage(self):
+		return self.welcome_message
+
+	def incoming(self, message, bytes, ip, vuLogger, random_reply):
+		try:
+			self.log_obj = amun_logging.amun_logging("vuln_analyzer", vuLogger)
+
+			### construct standard reply
+			#self.reply = random_reply
+			self.reply = []
+			for i in range(0,80):
+				try:
+					self.reply.append( struct.pack("B", 0) )
+				except KeyboardInterrupt:
+					raise
+
+			### SMB Negotiate Request
+			### 0x00 0x00 0x00 0x2f 0xff 0x53 0x4d 0x42 0x72 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+			### 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0xcf 0x6b
+			### 0x00 0x00 0x00 0x00 0x00 0x0c 0x00 0x02 0x4e 0x54 0x20 0x4c 0x4d 0x20 0x30 0x2e
+			### 0x31 0x32 0x00
+			
+			### SMB Setup and X
+			### 0x00 0x00 0x00 0x4b 0xff 0x53 0x4d 0x42 0x73 0x00 0x00 0x00 0x00 0x08 0x00 0x00
+			### 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0xff 0xff 0x49 0x68
+			### 0x00 0x00 0x00 0x00 0x0d 0xff 0x00 0x00 0x00 0xff 0xff 0x02 0x00 0x49 0x68 0x00
+			### 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x01 0x00 0x00 0x00 0x0e
+			### 0x00 0x00 0x00 0x70 0x6f 0x73 0x69 0x78 0x00 0x70 0x79 0x73 0x6d 0x62 0x00
+
+
+			###"\x00\x00\x00\x55\xff\x53\x4d\x42\x72\x00\x00\x00\x00\x98\x01\x28"
+			###"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xaa"
+			###"\x00\x00\xc6\xa3\x11\x03\x00\x03\x0a\x00\x01\x00\x04\x11\x00\x00"
+			###"\x00\x00\x01\x00\x00\x00\x00\x00\xfd\xe3\x00\x00\x67\xd9\x26\x46"
+			###"\xad\x3d\xc9\x01\xc4\xff\x00\x10\x00\xcf\x93\x98\x87\x52\x1d\x7c"
+			###"\x42\x9a\xed\x0f\x24\x73\xdb\x5c\x46";
+
+
+			### prepare default resultSet
+			resultSet = {}
+			resultSet["vulnname"] = self.vuln_name
+			resultSet["accept"] = False
+			resultSet["result"] = False
+			resultSet["shutdown"] = False
+			resultSet["reply"] = "None"
+			resultSet["stage"] = self.stage
+			resultSet["shellcode"] = "None"
+			resultSet["isFile"] = False
+
+			if self.stage == "MS08067_STAGE1" and bytes==51:
+				print ".::[Amun - MS08-067 STAGE1] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				#print message
+				#print ">> Request:"
+				#self.print_message(message)
+				resultSet["result"] = True
+				resultSet["accept"] = True
+				self.reply[0] = "\x00"
+				self.reply[1] = "\x00"
+				self.reply[2] = "\x00"
+				### size ??? 4 kuerzer
+				self.reply[3] = "\x4c"
+				### ff
+				self.reply[4] = "\xff"
+				## SMB
+				self.reply[5] = "\x53"
+				self.reply[6] = "\x4d"
+				self.reply[7] = "\x42"
+				### command (dialect name)
+				self.reply[8] = "\x72"
+				### error class
+				self.reply[9] = "\x00"
+				### reserved
+				self.reply[10] = "\x00"
+				### error code
+				self.reply[11] = "\x00"
+				self.reply[12] = "\x00"
+				### flag
+				self.reply[13] = "\x00"
+				### flag2
+				self.reply[14] = "\x00"
+				self.reply[15] = "\x00"
+				### extra
+				self.reply[16] = "\x00"
+				self.reply[17] = "\x00"
+				self.reply[18] = "\x00"
+				self.reply[19] = "\x00"
+				self.reply[20] = "\x00"
+				self.reply[21] = "\x00"
+				self.reply[22] = "\x00"
+				self.reply[23] = "\x00"
+				self.reply[24] = "\x00"
+				self.reply[25] = "\x00"
+				self.reply[26] = "\x00"
+				self.reply[27] = "\x00"
+				### tree ID
+				self.reply[28] = "\x00"
+				self.reply[29] = "\x00"
+				### pid
+				self.reply[30] = message[30]
+				self.reply[31] = message[31]
+				### uid
+				self.reply[32] = "\x00"
+				self.reply[33] = "\x00"
+				### mid
+				self.reply[34] = message[34]
+				self.reply[35] = message[35]
+				### word count (hier 0 also auch kein words teil)
+				self.reply[36] = "\x11"
+				###### parameter block
+				### dialect
+				self.reply[37] = "\x07"
+				### securityMode
+				self.reply[38] = "\x01"
+				### max mpx count
+				self.reply[39] = "\x01"
+				### max vcs
+				self.reply[40] = "\x01"
+				### max buffer size
+				self.reply[41] = "\x40"
+				self.reply[42] = "\x00"
+				self.reply[43] = "\x00"
+				self.reply[44] = "\x00"
+				### max raw
+				self.reply[45] = "\x40"
+				self.reply[46] = "\x00"
+				self.reply[47] = "\x00"
+				self.reply[48] = "\x00"
+				### session key
+				self.reply[49] = "\x00"
+				self.reply[50] = "\x01"
+				self.reply[51] = "\x00"
+				self.reply[52] = "\x00"
+				### capabilities
+				self.reply[53] = "\x00"
+				self.reply[54] = "\x00"
+				self.reply[55] = "\x00"
+				self.reply[56] = "\x04"
+				### system timelow
+				self.reply[57] = "\x00"
+				self.reply[58] = "\x00"
+				self.reply[59] = "\x00"
+				self.reply[60] = "\x00"
+				### system time high
+				self.reply[61] = "\x00"
+				self.reply[62] = "\x00"
+				self.reply[63] = "\x00"
+				self.reply[64] = "\x00"
+				### server time zone
+				self.reply[65] = "\x00"
+				### encryptedkey lenght
+				self.reply[66] = "\x00"
+				### byte count
+				self.reply[67] = "\x0c"
+				####
+				self.reply[68] = "\x00"
+				self.reply[69] = "\xff"
+				self.reply[70] = "\x00"
+				self.reply[71] = "\x10"
+				self.reply[72] = "\x00"
+				self.reply[73] = "\xcf"
+				self.reply[74] = "\x93"
+				self.reply[75] = "\x98"
+				self.reply[76] = "\x87"
+				self.reply[77] = "\x52"
+				self.reply[78] = "\x1d"
+				self.reply[79] = "\x7c"
+				###
+				#self.reply[80] = "\x42"
+				#self.reply[81] = "\x9a"
+				#self.reply[82] = "\xed"
+				#self.reply[83] = "\x0f"
+				#self.reply[84] = "\x24"
+				#self.reply[85] = "\x73"
+				#self.reply[86] = "\xdb"
+				#self.reply[87] = "\x5c"
+				#self.reply[88] = "\x46"
+				####
+				#print "<< Response:"
+				#self.print_message(self.reply)
+				resultSet['reply'] = "".join(self.reply)
+				self.stage = "MS08067_STAGE2"
+				return resultSet
+			elif self.stage == "MS08067_STAGE2":
+				print ".::[Amun - MS08-067 STAGE2] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				print ">> Request:"
+				self.print_message(message)
+				#resultSet["result"] = True
+				#resultSet["accept"] = True
+				#print "<< Response:"
+				#self.print_message(self.reply)
+				#resultSet['reply'] = "".join(self.reply)
+				#self.stage = "MS08067_STAGE2"
+				return resultSet
+			elif self.stage == "SHELLCODE":
+				if bytes>0:
+					print ".::[Amun - Analyzer] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+					resultSet["result"] = True
+					resultSet["accept"] = True
+					resultSet['reply'] = "".join(self.reply)
+					self.shellcode.append(message)
+					self.stage = "SHELLCODE"
+					#resultSet["shellcode"] = "".join(self.shellcode)
+					return resultSet
+				else:
+					print ".::[Amun - Analyzer] finish collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+					resultSet["result"] = False
+					resultSet["accept"] = True
+					resultSet["reply"] = "None"
+					self.shellcode.append(message)
+					resultSet["shellcode"] = "".join(self.shellcode)
+					return resultSet
+			else:
+				resultSet["result"] = False
+				resultSet["accept"] = False
+				resultSet["reply"] = "None"
+				return resultSet
+			return resultSet
+		except KeyboardInterrupt:
+			raise
+		except StandardError, e:
+			print e
+		except:
+			print "Analyzer fatal error"

